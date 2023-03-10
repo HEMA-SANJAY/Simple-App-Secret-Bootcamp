@@ -5,16 +5,24 @@ const ejs = require('ejs');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const bcrypt = require("bcrypt");
-
-var saltRounds = 10;
-
-mongoose.set('strictQuery', true);
-mongoose.connect("mongodb://0.0.0.0:27017/UserDB", {useNewUrlParser : true});
-
 const app = express();
+const session = require("express-session");
+const passport = require("passport");
+const LocalStrategy = require("passport-local").Strategy;
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({extended : true}));
+
+app.use(session({
+    secret: "Our little secret",
+    resave : false,
+    saveUninitialized : false
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+
+mongoose.set('strictQuery', true);
+mongoose.connect("mongodb://0.0.0.0:27017/UserDB", {useNewUrlParser : true});
 
 const userSchema = new mongoose.Schema( {
     email : String,
@@ -22,6 +30,49 @@ const userSchema = new mongoose.Schema( {
 });
 
 const User = mongoose.model("User", userSchema);
+
+passport.use(new LocalStrategy((username,password,done)=>{  
+    try{
+        User.findOne({email :username}).then(user=>{
+            if (!user){
+                return done(null,false, {message:"Incorrect Username"})
+            }
+            bcrypt.compare(password,user.password,function(err,result){ 
+                if (err){
+                    return done(err)
+                }
+
+                if (result) {
+                    return done(null,user)
+                }
+                else {
+                    return done (null,false, {message:"Incorrect Password"})
+                }
+            })
+
+        })
+    }
+    catch (err){
+            return done(err)
+    }
+
+}))
+
+passport.serializeUser(function(user, done) {
+    done(null, user.id);
+  });
+
+passport.deserializeUser(function(id, done) {
+    console.log("Deserializing User")
+    try {
+        User.findById(id).then(user=>{
+            done(null,user);
+        })
+    }
+    catch (err){
+        done(err);
+    }
+});
 
 app.get("/", function(req, res){
     res.render("home");
@@ -32,53 +83,47 @@ app.get("/register", function(req, res){
 });
 
 app.get("/secrets", function(req, res){
-    res.render("secrets");
+    if(req.isAuthenticated()){
+        res.render("secrets");
+    }else{
+        console.log("Not Authenticated");
+        res.redirect("/");
+    }
 });
 
 app.get("/login", function(req, res){
     res.render("login");
 });
 
+app.get("/logout", function(req, res){
+    req.logout(function(err){
+        if(err){
+            console.log(err)
+        }
+        res.redirect("/");
+    });
+});
+
 app.post("/register", function(req, res){
-    username = req.body.username;
-    bcrypt.hash(req.body.password, saltRounds, function(err, hash) {
+    bcrypt.hash(req.body.password, 10, function(err, hash) {
         if(err){
             console.log(err);
         }
         const newUser = new User({
-            email : username,
+            email : req.body.username,
             password : hash
         });
     
         newUser.save();
-        res.render("secrets");
+        passport.authenticate('local')(req,res,()=>{res.redirect("/secrets")}) ;
+        
     });
-
-    
 });
 
-app.post("/login", function(req, res){
-    const username = req.body.username;
-    const password = req.body.password;
-
-    User.findOne({email : username})
-    .then((foundresult) => {
-        if(foundresult){
-            bcrypt.compare(password, foundresult.password, function(err, result) {
-                if(result === true){
-                    res.render("secrets");
-                }else{
-                    res.send("Incorrect password");
-                }
-            });
-        }else{
-            console.log("UserNotFound");
-        }
-    })
-    .catch((err) => {
-        console.log(err);
-    });  
-});
+app.post('/login', 
+ passport.authenticate('local', 
+ { successRedirect:"/secrets", failureRedirect: '/login' })
+ );
 
 app.listen(3000, function(err){
     if(!err){
