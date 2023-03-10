@@ -8,7 +8,12 @@ const bcrypt = require("bcrypt");
 const app = express();
 const session = require("express-session");
 const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 const LocalStrategy = require("passport-local").Strategy;
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const findOrCreate = require("mongoose-findorcreate");
+const e = require('express');
+
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({extended : true}));
@@ -26,9 +31,11 @@ mongoose.connect("mongodb://0.0.0.0:27017/UserDB", {useNewUrlParser : true});
 
 const userSchema = new mongoose.Schema( {
     email : String,
-    password : String
+    password : String,
+    googleId : String, 
+    secret : String
 });
-
+userSchema.plugin(findOrCreate);
 const User = mongoose.model("User", userSchema);
 
 passport.use(new LocalStrategy((username,password,done)=>{  
@@ -74,8 +81,30 @@ passport.deserializeUser(function(id, done) {
     }
 });
 
+passport.use(new GoogleStrategy({
+    clientID: process.env.CLIENT_ID,
+    clientSecret: process.env.CLIENT_SECRET,
+    callbackURL: "http://localhost:3000/auth/google/secrets"
+  },
+  function(accessToken, refreshToken, profile, cb) {
+    User.findOrCreate({ googleId: profile.id }, function (err, user) {
+      return cb(err, user);
+    });
+  }
+));;
+
 app.get("/", function(req, res){
     res.render("home");
+});
+
+app.get("/auth/google",
+  passport.authenticate('google', { scope: ["profile"] }));
+
+app.get("/auth/google/secrets", 
+  passport.authenticate('google', { failureRedirect: '/login' }),
+  function(req, res) {
+    // Successful authentication, redirect home.
+    res.redirect("/secrets");
 });
 
 app.get("/register", function(req, res){
@@ -83,12 +112,15 @@ app.get("/register", function(req, res){
 });
 
 app.get("/secrets", function(req, res){
-    if(req.isAuthenticated()){
-        res.render("secrets");
-    }else{
-        console.log("Not Authenticated");
-        res.redirect("/");
-    }
+    User.find({"secret": {$ne: null}}, function(err, foundUsers){
+        if(err){
+            console.log(err);
+        } else {
+            if(foundUsers){
+                res.render("secrets", {userWithSecrets : foundUsers});
+            }
+        }
+    })
 });
 
 app.get("/login", function(req, res){
@@ -101,6 +133,32 @@ app.get("/logout", function(req, res){
             console.log(err)
         }
         res.redirect("/");
+    });
+});
+
+app.get("/submit", function(req, res){
+    if(req.isAuthenticated()){
+        res.render("submit");
+    }else{
+        console.log("Not Authenticated");
+        res.redirect("/");
+    }
+});
+
+app.post("/submit", function(req, res){
+    submittedSecret = req.body.secret;
+
+    User.findById(req.user.id, function(err, foundResult){
+        if(err){
+            console.log(err);
+        } else {
+            if(foundResult){
+                foundResult.secret = submittedSecret;
+                foundResult.save(function(){
+                    res.redirect("/secrets")
+                });
+            }
+        }
     });
 });
 
